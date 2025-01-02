@@ -1,0 +1,16 @@
+name: dnsecg
+channels:
+  - defaults
+dependencies:
+  - pip
+  - python=3.10
+  - pip:
+    - numpy
+    - torch
+    - torchvision
+    - timm
+    - wfdb
+    - neurokit2
+    - tqdm
+    - seaborn
+    - tensorboard

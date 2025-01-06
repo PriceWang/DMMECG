@@ -357,13 +357,9 @@ def save_model(
     model,
     optimizer,
     loss_scaler,
-    save_best=False,
 ):
     output_dir = Path(args.output_dir)
-    if save_best:
-        epoch_name = "best"
-    else:
-        epoch_name = str(epoch)
+    epoch_name = str(epoch)
     if loss_scaler is not None:
         checkpoint_paths = [output_dir / ("checkpoint-%s.pth" % epoch_name)]
         for checkpoint_path in checkpoint_paths:
@@ -383,7 +379,7 @@ def save_model(
             client_state=client_state,
         )
 
-    if is_main_process() and isinstance(epoch, int) and not save_best:
+    if is_main_process() and isinstance(epoch, int):
         to_del = epoch - args.save_ckpt_num * args.save_ckpt_freq
         old_ckpt = output_dir / ("checkpoint-%s.pth" % to_del)
         if os.path.exists(old_ckpt):
@@ -399,10 +395,6 @@ def load_model(args, model, optimizer, loss_scaler):
         latest_ckpt = -1
         for ckpt in all_checkpoints:
             t = ckpt.split("-")[-1].split(".")[0]
-            if t == "best":
-                args.resume = os.path.join(output_dir, "checkpoint-best.pth")
-                latest_ckpt = -1
-                break
             if t.isdigit():
                 latest_ckpt = max(int(t), latest_ckpt)
         if latest_ckpt >= 0:

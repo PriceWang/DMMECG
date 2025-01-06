@@ -2,8 +2,8 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2024-12-16 17:51:30
-FilePath: /workspace_3090/DNSECG/training.py
+LastEditTime: 2025-01-03 17:41:23
+FilePath: /DNSECG/training.py
 Description: training
 
 Copyright (c) 2024 by Guoxin Wang, All Rights Reserved. 
@@ -19,14 +19,15 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import utils.dns_models as dns_models
-import utils.misc as misc
-from engine import evaluate, train_one_epoch
 from thop import profile
 from timm.models import create_model
 
 # assert timm.__version__ == "0.3.2" # version check
 from torch.utils.tensorboard import SummaryWriter
+
+import utils.dns_models as dns_models
+import utils.misc as misc
+from engine import evaluate, train_one_epoch
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 from utils.misc import str2bool
 
@@ -125,10 +126,12 @@ def get_args_parser():
     parser.add_argument(
         "--train_path",
         default=[
-            "datasets/mitdb/af_beat_4_train.pth",
-            "datasets/incartdb/af_beat_4_train.pth",
-            "datasets/incartdb/af_beat_4_valid.pth",
-            "datasets/incartdb/af_beat_4_test.pth",
+            "datasets/challenge-2021/ul_beat.pth",
+            # "datasets/mitdb/af_beat_4_train.pth",
+            # "datasets/mitdb/af_beat_4_valid.pth",
+            # "datasets/incartdb/af_beat_4_train.pth",
+            # "datasets/incartdb/af_beat_4_valid.pth",
+            # "datasets/incartdb/af_beat_4_test.pth",
         ],
         nargs="+",
         type=str,
@@ -136,7 +139,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--test_path",
-        default=["datasets/mitdb/af_beat_4_valid.pth"],
+        default=["datasets/mitdb/af_beat_4_test.pth"],
         nargs="+",
         type=str,
         help="testing set path",
@@ -161,7 +164,6 @@ def get_args_parser():
     parser.add_argument("--save_ckpt", type=str2bool, default=True)
     parser.add_argument("--save_ckpt_freq", default=1, type=int)
     parser.add_argument("--save_ckpt_num", default=1, type=int)
-    parser.add_argument("--save_best", action="store_true", default=False, help="")
 
     parser.add_argument(
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
@@ -171,7 +173,7 @@ def get_args_parser():
         "--dist_eval",
         action="store_true",
         default=False,
-        help="Enabling distributed evaluation (recommended during training for faster monitor",
+        help="Enabling distributed evaluation",
     )
     parser.add_argument("--num_workers", default=20, type=int)
     parser.add_argument(
@@ -286,12 +288,13 @@ def main(args):
         expert.to(device)
         expert.eval()
 
+    dummy_input = dataset_train[0][0] if args.eval else dataset_train[0]
     experts_complexity = torch.tensor(
         [
             profile(
                 expert,
                 verbose=False,
-                inputs=(dataset_train[0][0].unsqueeze(0).unsqueeze(0).to(device),),
+                inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
             )[0]
             for expert in experts
         ]
@@ -309,7 +312,7 @@ def main(args):
         profile(
             model,
             verbose=False,
-            inputs=(dataset_train[0][0].unsqueeze(0).unsqueeze(0).to(device),),
+            inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
         )[0]
     ).to(device)
 
@@ -362,7 +365,6 @@ def main(args):
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
-    max_accuracy = 0.0
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
@@ -380,51 +382,18 @@ def main(args):
             args=args,
         )
 
-        test_stats = evaluate(data_loader_val, model, experts, device)
-        print(
-            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
-        )
-        max_accuracy = max(max_accuracy, test_stats["acc1"])
-        print(f"Max accuracy: {max_accuracy:.2f}%")
-        distribution_values = ", ".join(
-            str(test_stats[key]) for key in test_stats if key.startswith("dist")
-        )
-        print(f"Distribution: {distribution_values}")
-        total_complexity = (
-            torch.tensor(
-                [test_stats[key] for key in test_stats if key.startswith("dist")]
-            ).to(device)
-            / len(dataset_val)
-            * experts_complexity
-        ).sum() + gate_complexity
-        print(f"Complexity: {total_complexity}")
-
-        save_flag = False
         if args.output_dir and args.save_ckpt:
-            if args.save_best:
-                if max_accuracy == test_stats["acc1"]:
-                    save_flag = True
-            else:
-                if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
-                    save_flag = True
-        if save_flag:
-            misc.save_model(
-                args=args,
-                model=model,
-                optimizer=optimizer,
-                loss_scaler=loss_scaler,
-                epoch=epoch,
-                save_best=args.save_best,
-            )
-
-        if log_writer is not None:
-            log_writer.add_scalar("perf/test_acc1", test_stats["acc1"], epoch)
-            log_writer.add_scalar("perf/test_acc3", test_stats["acc3"], epoch)
-            log_writer.add_scalar("perf/test_loss", test_stats["loss"], epoch)
+            if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
+                misc.save_model(
+                    args=args,
+                    model=model,
+                    optimizer=optimizer,
+                    loss_scaler=loss_scaler,
+                    epoch=epoch,
+                )
 
         log_stats = {
             **{f"train_{k}": v for k, v in train_stats.items()},
-            **{f"test_{k}": v for k, v in test_stats.items()},
             "epoch": epoch,
             "n_parameters": n_parameters,
         }

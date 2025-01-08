@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-01-06 14:17:17
+LastEditTime: 2025-01-08 14:24:27
 FilePath: /DNSECG/engine.py
 Description: 
 
@@ -47,7 +47,7 @@ def train_one_epoch(
     if log_writer is not None:
         print("log_dir: {}".format(log_writer.log_dir))
 
-    for data_iter_step, samples in enumerate(
+    for data_iter_step, (samples, targets) in enumerate(
         metric_logger.log_every(data_loader, print_freq, header)
     ):
         # we use a per iteration (instead of per epoch) lr scheduler
@@ -60,25 +60,29 @@ def train_one_epoch(
             samples = samples.to(device, non_blocking=True)
         if len(samples.shape) == 2:
             samples = samples.unsqueeze(1)
+        targets = targets.to(device, non_blocking=True)
 
         with torch.amp.autocast(device.type):
             batch_size = samples.size(0)
+
             gate_outputs = model(samples).squeeze(1)
-            experts_prob = (
-                torch.stack(
-                    [softmax(expert(samples)).max(1).values for expert in experts],
-                    dim=1,
-                )
-                / args.tau
+
+            experts_loss = torch.tensor(
+                [cross_entropy(expert(samples), targets) for expert in experts]
+            ).to(device)
+            experts_dist = softmax(
+                experts_loss / torch.max(experts_loss) / args.tau_g,
+                dim=0,
             )
-            experts_dist = softmax(experts_prob, dim=1)
-            loss_g = mse_loss(gate_outputs, experts_dist)
+
+            loss_g = mse_loss(gate_outputs, 1 - experts_dist.repeat(batch_size, 1))
             loss_p = mse_loss(gate_outputs, 1 - complexity_dist.repeat(batch_size, 1))
             loss = mse_loss(
                 gate_outputs,
-                (
-                    (1 - args.lam) * experts_dist
-                    + args.lam * (1 - complexity_dist.repeat(batch_size, 1))
+                1
+                - (
+                    (1 - args.lam) * experts_dist.repeat(batch_size, 1)
+                    + args.lam * complexity_dist.repeat(batch_size, 1)
                 ),
             )
         loss_gate = loss_g.item()

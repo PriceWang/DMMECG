@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-08-17 11:06:06
 LastEditors: Guoxin Wang
-LastEditTime: 2024-12-30 14:50:18
+LastEditTime: 2025-01-06 16:30:00
 FilePath: /DNSECG/utils/dns_models.py
 Description: Models
 
@@ -202,18 +202,7 @@ class Gate(nn.Module):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.gate_encoder = nn.Sequential(
-            nn.Conv1d(1, 16, kernel_size=5, stride=1),
-            nn.BatchNorm1d(16),
-            nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=5),
-            nn.Conv1d(16, 32, kernel_size=5, stride=1),
-            nn.BatchNorm1d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool1d(kernel_size=5),
-            nn.Flatten(),
-        )
-        self.gate_linear = MLP(input_dim=576, hidden_dims=mlp_sizes)
+        self.gate = nn.Sequential(MLP(hidden_dims=mlp_sizes))
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -221,14 +210,9 @@ class Gate(nn.Module):
             nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.Conv1d):
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        x = self.gate_encoder(x)
-        x = self.gate_linear(x)
+        x = self.gate(x)
         return x
 
 
@@ -667,12 +651,12 @@ def gate_af(
 ) -> nn.Module:
     model = (
         Gate(
-            mlp_sizes=[240, pretrained_cfg_overlay["n_experts"]],
+            mlp_sizes=[240, 120, pretrained_cfg_overlay["n_experts"]],
             **kwargs,
         )
         if pretrained_cfg_overlay.get("n_experts", None)
         else Gate(
-            mlp_sizes=[240, 4],
+            mlp_sizes=[240, 120, 4],
             **kwargs,
         )
     )

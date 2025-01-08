@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-01-03 17:41:23
+LastEditTime: 2025-01-08 14:27:53
 FilePath: /DNSECG/training.py
 Description: training
 
@@ -21,8 +21,6 @@ import torch
 import torch.backends.cudnn as cudnn
 from thop import profile
 from timm.models import create_model
-
-# assert timm.__version__ == "0.3.2" # version check
 from torch.utils.tensorboard import SummaryWriter
 
 import utils.dns_models as dns_models
@@ -40,7 +38,7 @@ def get_args_parser():
         type=int,
         help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus",
     )
-    parser.add_argument("--epochs", default=50, type=int)
+    parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument(
         "--accum_iter",
         default=1,
@@ -107,11 +105,16 @@ def get_args_parser():
         "--warmup_epochs", type=int, default=40, metavar="N", help="epochs to warmup LR"
     )
     parser.add_argument(
-        "--tau",
+        "--tau_g",
         type=float,
         default=1,
-        metavar="T",
-        help="temperature in training epoch",
+        help="temperature for gate in training epoch",
+    )
+    parser.add_argument(
+        "--tau_p",
+        type=float,
+        default=1,
+        help="temperature for penalty in training epoch",
     )
     parser.add_argument(
         "--lam", type=float, default=0.5, metavar="L", help="lambda in training epoch"
@@ -126,12 +129,12 @@ def get_args_parser():
     parser.add_argument(
         "--train_path",
         default=[
-            "datasets/challenge-2021/ul_beat.pth",
-            # "datasets/mitdb/af_beat_4_train.pth",
+            # "datasets/challenge-2021/ul_beat.pth",
+            "datasets/mitdb/af_beat_4_train.pth",
             # "datasets/mitdb/af_beat_4_valid.pth",
-            # "datasets/incartdb/af_beat_4_train.pth",
-            # "datasets/incartdb/af_beat_4_valid.pth",
-            # "datasets/incartdb/af_beat_4_test.pth",
+            "datasets/incartdb/af_beat_4_train.pth",
+            "datasets/incartdb/af_beat_4_valid.pth",
+            "datasets/incartdb/af_beat_4_test.pth",
         ],
         nargs="+",
         type=str,
@@ -139,7 +142,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--test_path",
-        default=["datasets/mitdb/af_beat_4_test.pth"],
+        default=["datasets/mitdb/af_beat_4_valid.pth"],
         nargs="+",
         type=str,
         help="testing set path",
@@ -288,7 +291,7 @@ def main(args):
         expert.to(device)
         expert.eval()
 
-    dummy_input = dataset_train[0][0] if args.eval else dataset_train[0]
+    dummy_input = dataset_train[0][0]
     experts_complexity = torch.tensor(
         [
             profile(
@@ -299,11 +302,12 @@ def main(args):
             for expert in experts
         ]
     ).to(device)
-
-    # complexity_dist = torch.log(experts_complexity) / torch.max(
-    #     torch.log(experts_complexity)
-    # )
-    complexity_dist = torch.nn.functional.softmax(torch.log(experts_complexity), dim=0)
+    complexity_dist = torch.nn.functional.softmax(
+        torch.log(experts_complexity)
+        / torch.max(torch.log(experts_complexity))
+        / args.tau_p,
+        dim=0,
+    )
 
     model = create_model(args.model, pretrained_cfg_overlay={"n_experts": len(experts)})
     model.to(device)
@@ -365,6 +369,7 @@ def main(args):
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
+    max_accuracy = 0.0
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
@@ -382,6 +387,25 @@ def main(args):
             args=args,
         )
 
+        test_stats = evaluate(data_loader_val, model, experts, device)
+        print(
+            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
+        )
+        max_accuracy = max(max_accuracy, test_stats["acc1"])
+        print(f"Max accuracy: {max_accuracy:.2f}%")
+        distribution_values = ", ".join(
+            str(test_stats[key]) for key in test_stats if key.startswith("dist")
+        )
+        print(f"Distribution: {distribution_values}")
+        total_complexity = (
+            torch.tensor(
+                [test_stats[key] for key in test_stats if key.startswith("dist")]
+            ).to(device)
+            / len(dataset_val)
+            * experts_complexity
+        ).sum() + gate_complexity
+        print(f"Complexity: {total_complexity}")
+
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 misc.save_model(
@@ -392,8 +416,14 @@ def main(args):
                     epoch=epoch,
                 )
 
+        if log_writer is not None:
+            log_writer.add_scalar("valid/acc1", test_stats["acc1"], epoch)
+            log_writer.add_scalar("valid/acc3", test_stats["acc3"], epoch)
+            log_writer.add_scalar("valid/loss", test_stats["loss"], epoch)
+
         log_stats = {
             **{f"train_{k}": v for k, v in train_stats.items()},
+            **{f"test_{k}": v for k, v in test_stats.items()},
             "epoch": epoch,
             "n_parameters": n_parameters,
         }

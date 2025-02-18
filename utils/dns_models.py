@@ -2,8 +2,8 @@
 Author: Guoxin Wang
 Date: 2023-08-17 11:06:06
 LastEditors: Guoxin Wang
-LastEditTime: 2025-01-06 16:30:00
-FilePath: /DNSECG/utils/dns_models.py
+LastEditTime: 2025-02-18 15:17:28
+FilePath: /DMMECG/utils/dns_models.py
 Description: Models
 
 Copyright (c) 2024 by Guoxin Wang, All Rights Reserved. 
@@ -195,24 +195,26 @@ class ViT1D(nn.Module):
         return signals
 
 
-class Gate(nn.Module):
+class Router(nn.Module):
     def __init__(
         self,
-        mlp_sizes=[4],
+        n_expert=3,
+        n_class=4,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.gate = nn.Sequential(MLP(hidden_dims=mlp_sizes))
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.kaiming_normal_(m.weight)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+        self.router = nn.ModuleList(
+            [
+                MLP(input_dim=n_class, hidden_dims=[64, 16, n_class])
+                for _ in range(n_expert)
+            ]
+        )
 
     def forward(self, x):
-        x = self.gate(x)
+        x = torch.stack(
+            [self.router[n](x[:, n, :]) for n in range(len(self.router))],
+            dim=1,
+        ).sum(dim=1)
         return x
 
 
@@ -221,6 +223,7 @@ def vit_xxatto_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -248,6 +251,7 @@ def vit_xatto_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -275,6 +279,7 @@ def vit_atto_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -302,6 +307,7 @@ def vit_tiny_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -331,6 +337,7 @@ def vit_small_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -358,6 +365,7 @@ def vit_base_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -385,6 +393,7 @@ def vit_large_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -435,6 +444,7 @@ def vit_xxatto_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -462,6 +472,7 @@ def vit_xatto_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -489,6 +500,7 @@ def vit_atto_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -516,6 +528,7 @@ def vit_tiny_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -547,6 +560,7 @@ def vit_small_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -572,6 +586,7 @@ def vit_base_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -597,6 +612,7 @@ def vit_large_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -622,6 +638,7 @@ def vit_huge_id(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = ViT1D(
@@ -643,22 +660,22 @@ def vit_huge_id(
 
 
 @register_model
-def gate_af(
+def router_af(
     pretrained: bool = False,
     pretrained_cfg: str = None,
     pretrained_cfg_overlay: str = None,
+    cache_dir: str = None,
     **kwargs,
 ) -> nn.Module:
     model = (
-        Gate(
-            mlp_sizes=[240, 120, pretrained_cfg_overlay["n_experts"]],
+        Router(
+            n_expert=pretrained_cfg_overlay["n_expert"],
+            n_class=pretrained_cfg_overlay["n_class"],
             **kwargs,
         )
-        if pretrained_cfg_overlay.get("n_experts", None)
-        else Gate(
-            mlp_sizes=[240, 120, 4],
-            **kwargs,
-        )
+        if pretrained_cfg_overlay.get("n_expert", None)
+        and pretrained_cfg_overlay.get("n_class", None)
+        else Router(**kwargs)
     )
     if pretrained:
         if pretrained_cfg_overlay and pretrained_cfg_overlay.get("path", None):

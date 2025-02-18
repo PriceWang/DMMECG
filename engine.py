@@ -2,8 +2,8 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-01-08 14:24:27
-FilePath: /DNSECG/engine.py
+LastEditTime: 2025-02-18 15:28:35
+FilePath: /DMMECG/engine.py
 Description: 
 
 Copyright (c) 2024 by Guoxin Wang, All Rights Reserved. 
@@ -15,16 +15,15 @@ from typing import Iterable
 
 import torch
 from timm.utils import accuracy
-from torch.nn.functional import cross_entropy, mse_loss, softmax
+from torch.nn.functional import cross_entropy, nll_loss, softmax
 
 import utils.lr_sched as lr_sched
 import utils.misc as misc
 
 
 def train_one_epoch(
-    model: torch.nn.Module,
+    router: torch.nn.Module,
     experts: list,
-    complexity_dist: torch.Tensor,
     data_loader: Iterable,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
@@ -34,7 +33,7 @@ def train_one_epoch(
     log_writer=None,
     args=None,
 ):
-    model.train()
+    router.train()
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = "Epoch: [{}]".format(epoch)
@@ -63,30 +62,10 @@ def train_one_epoch(
         targets = targets.to(device, non_blocking=True)
 
         with torch.amp.autocast(device.type):
-            batch_size = samples.size(0)
+            experts_logits = torch.stack([expert(samples) for expert in experts], dim=1)
+            weighted_logits = router(experts_logits)
+            loss = cross_entropy(weighted_logits, targets)
 
-            gate_outputs = model(samples).squeeze(1)
-
-            experts_loss = torch.tensor(
-                [cross_entropy(expert(samples), targets) for expert in experts]
-            ).to(device)
-            experts_dist = softmax(
-                experts_loss / torch.max(experts_loss) / args.tau_g,
-                dim=0,
-            )
-
-            loss_g = mse_loss(gate_outputs, 1 - experts_dist.repeat(batch_size, 1))
-            loss_p = mse_loss(gate_outputs, 1 - complexity_dist.repeat(batch_size, 1))
-            loss = mse_loss(
-                gate_outputs,
-                1
-                - (
-                    (1 - args.lam) * experts_dist.repeat(batch_size, 1)
-                    + args.lam * complexity_dist.repeat(batch_size, 1)
-                ),
-            )
-        loss_gate = loss_g.item()
-        loss_penalty = loss_p.item()
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
@@ -98,7 +77,7 @@ def train_one_epoch(
             loss,
             optimizer,
             clip_grad=max_norm,
-            parameters=model.parameters(),
+            parameters=router.parameters(),
             create_graph=False,
             update_grad=(data_iter_step + 1) % accum_iter == 0,
         )
@@ -107,8 +86,6 @@ def train_one_epoch(
 
         torch.cuda.synchronize()
         metric_logger.update(loss=loss_value)
-        metric_logger.update(loss_g=loss_gate)
-        metric_logger.update(loss_p=loss_penalty)
         min_lr = 10.0
         max_lr = 0.0
         for group in optimizer.param_groups:
@@ -118,18 +95,12 @@ def train_one_epoch(
         metric_logger.update(lr=max_lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
-        loss_gate_reduce = misc.all_reduce_mean(loss_gate)
-        loss_penalty_reduce = misc.all_reduce_mean(loss_penalty)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
             log_writer.add_scalar("train/loss", loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar("train/loss_gate", loss_gate_reduce, epoch_1000x)
-            log_writer.add_scalar(
-                "train/loss_penalty", loss_penalty_reduce, epoch_1000x
-            )
             log_writer.add_scalar("train/lr", max_lr, epoch_1000x)
 
     # gather the stats from all processes
@@ -139,12 +110,12 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, experts, device):
+def valid(data_loader, router, experts, device):
     metric_logger = misc.MetricLogger(delimiter="  ")
     header = "Test:"
 
     # switch to evaluation mode
-    model.eval()
+    router.eval()
 
     for batch in metric_logger.log_every(data_loader, 10, header):
         samples = batch[0]
@@ -157,32 +128,152 @@ def evaluate(data_loader, model, experts, device):
 
         # compute output
         with torch.amp.autocast(device.type):
-            gate_outputs = model(samples).squeeze(1)
-            gate_dist = softmax(gate_outputs, dim=1)
-            expert_idx = torch.argmax(gate_dist, dim=1)
+            experts_logits = torch.stack([expert(samples) for expert in experts], dim=1)
+            weighted_logits = router(experts_logits)
+            loss = cross_entropy(weighted_logits, targets)
 
-            batch_size = samples.size(0)
-            outputs_list = []
-            for expert_id in range(len(experts)):
-                # mask for selecting samples assigned to this expert
-                mask = expert_idx == expert_id
-                metric_logger.meters[f"dist{expert_id}"].update(torch.sum(mask).item())
-                selected_samples = samples[mask]
+        acc1, acc3 = accuracy(weighted_logits, targets, topk=(1, 3))
 
-                # only forward selected samples
-                if selected_samples.size(0) > 0:
-                    expert_outputs = experts[expert_id](selected_samples)
-                    outputs_list.append((mask, expert_outputs))
+        batch_size = samples.shape[0]
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+        metric_logger.meters["acc3"].update(acc3.item(), n=batch_size)
 
-            # placeholder for final outputs
-            outputs = torch.zeros(
-                batch_size,
-                outputs_list[0][1].size(1),
-                device=samples.device,
-                dtype=outputs_list[0][1].dtype,
-            )
-            for mask, expert_outputs in outputs_list:
-                outputs[mask] = expert_outputs
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print(
+        "* Acc@1 {top1.global_avg:.3f} Acc@3 {top3.global_avg:.3f} loss {losses.global_avg:.3f}".format(
+            top1=metric_logger.acc1, top3=metric_logger.acc3, losses=metric_logger.loss
+        )
+    )
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+@torch.no_grad()
+def evaluate_lw(data_loader, router, thresholds, experts, device):
+    assert len(thresholds) == len(experts) - 1
+    metric_logger = misc.MetricLogger(delimiter="  ")
+    header = "Test:"
+
+    for batch in metric_logger.log_every(data_loader, 10, header):
+        samples = batch[0]
+        targets = batch[-1]
+        if not isinstance(samples, list):
+            samples = samples.to(device, non_blocking=True)
+        if len(samples.shape) == 2:
+            samples = samples.unsqueeze(1)
+        targets = targets.to(device, non_blocking=True)
+
+        batch_size = samples.size(0)
+        # compute output
+        with torch.amp.autocast(device.type):
+            outputs = None
+            indices = torch.arange(batch_size, device=samples.device)
+            inference_indices = indices
+            for expert_idx, expert in enumerate(experts):
+                if inference_indices.size(0) == 0:
+                    for left_idx in range(expert_idx, len(experts)):
+                        metric_logger.meters[f"dist{left_idx}"].update(0)
+                    break
+                if expert_idx == len(experts) - 1:
+                    expert_logits = expert(samples[inference_indices])
+                    outputs[inference_indices] = expert_logits
+                    metric_logger.meters[f"dist{len(experts)-1}"].update(
+                        inference_indices.size(0)
+                    )
+                else:
+                    expert_logits = expert(samples[inference_indices])
+                    weighted_logits = router.router[expert_idx](expert_logits)
+                    if expert_idx == 0:
+                        outputs = torch.zeros(
+                            batch_size,
+                            weighted_logits.size(1),
+                            dtype=expert_logits.dtype,
+                            device=samples.device,
+                        )
+                    mask = (
+                        torch.max(weighted_logits, dim=1).values
+                        > thresholds[expert_idx]
+                    )
+                    outputs[inference_indices[mask]] = expert_logits[mask]
+                    inference_indices = inference_indices[~mask]
+                    metric_logger.meters[f"dist{expert_idx}"].update(
+                        torch.sum(mask).item()
+                    )
+
+            loss = cross_entropy(outputs, targets)
+
+        acc1, acc3 = accuracy(outputs, targets, topk=(1, 3))
+
+        batch_size = samples.shape[0]
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+        metric_logger.meters["acc3"].update(acc3.item(), n=batch_size)
+
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print(
+        "* Acc@1 {top1.global_avg:.3f} Acc@3 {top3.global_avg:.3f} loss {losses.global_avg:.3f}".format(
+            top1=metric_logger.acc1, top3=metric_logger.acc3, losses=metric_logger.loss
+        )
+    )
+
+    return {
+        k: meter.total if k.startswith("dist") else meter.global_avg
+        for k, meter in metric_logger.meters.items()
+    }
+
+
+@torch.no_grad()
+def evaluate(data_loader, thresholds, experts, device):
+    assert len(thresholds) == len(experts) - 1
+    metric_logger = misc.MetricLogger(delimiter="  ")
+    header = "Test:"
+
+    for batch in metric_logger.log_every(data_loader, 10, header):
+        samples = batch[0]
+        targets = batch[-1]
+        if not isinstance(samples, list):
+            samples = samples.to(device, non_blocking=True)
+        if len(samples.shape) == 2:
+            samples = samples.unsqueeze(1)
+        targets = targets.to(device, non_blocking=True)
+
+        batch_size = samples.size(0)
+        # compute output
+        with torch.amp.autocast(device.type):
+            outputs = None
+            indices = torch.arange(batch_size, device=samples.device)
+            inference_indices = indices
+            for expert_idx, expert in enumerate(experts):
+                if inference_indices.size(0) == 0:
+                    for left_idx in range(expert_idx, len(experts)):
+                        metric_logger.meters[f"dist{left_idx}"].update(0)
+                    break
+                if expert_idx == len(experts) - 1:
+                    expert_logits = expert(samples[inference_indices])
+                    outputs[inference_indices] = expert_logits
+                    metric_logger.meters[f"dist{len(experts)-1}"].update(
+                        inference_indices.size(0)
+                    )
+                else:
+                    expert_logits = expert(samples[inference_indices])
+                    if expert_idx == 0:
+                        outputs = torch.zeros(
+                            batch_size,
+                            expert_logits.size(1),
+                            dtype=expert_logits.dtype,
+                            device=samples.device,
+                        )
+                    mask = (
+                        torch.max(expert_logits, dim=1).values > thresholds[expert_idx]
+                    )
+                    outputs[inference_indices[mask]] = expert_logits[mask]
+                    inference_indices = inference_indices[~mask]
+                    metric_logger.meters[f"dist{expert_idx}"].update(
+                        torch.sum(mask).item()
+                    )
 
             loss = cross_entropy(outputs, targets)
 

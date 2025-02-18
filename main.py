@@ -2,8 +2,8 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-01-08 14:27:53
-FilePath: /DNSECG/training.py
+LastEditTime: 2025-02-18 15:34:32
+FilePath: /DMMECG/main.py
 Description: training
 
 Copyright (c) 2024 by Guoxin Wang, All Rights Reserved. 
@@ -25,7 +25,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import utils.dns_models as dns_models
 import utils.misc as misc
-from engine import evaluate, train_one_epoch
+from engine import evaluate, evaluate_lw, train_one_epoch, valid
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 from utils.misc import str2bool
 
@@ -48,11 +48,11 @@ def get_args_parser():
 
     # Model parameters
     parser.add_argument(
-        "--model",
-        default="gate_af",
+        "--router",
+        default="router_af",
         type=str,
-        metavar="MODEL",
-        help="Name of model of gate",
+        metavar="ROUTER",
+        help="arch of router",
     )
     parser.add_argument(
         "--experts",
@@ -103,21 +103,6 @@ def get_args_parser():
     )
     parser.add_argument(
         "--warmup_epochs", type=int, default=40, metavar="N", help="epochs to warmup LR"
-    )
-    parser.add_argument(
-        "--tau_g",
-        type=float,
-        default=1,
-        help="temperature for gate in training epoch",
-    )
-    parser.add_argument(
-        "--tau_p",
-        type=float,
-        default=1,
-        help="temperature for penalty in training epoch",
-    )
-    parser.add_argument(
-        "--lam", type=float, default=0.5, metavar="L", help="lambda in training epoch"
     )
 
     # Augmentation parameters
@@ -172,6 +157,9 @@ def get_args_parser():
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
     parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
+    parser.add_argument(
+        "--logits_weighting", action="store_true", help="Enable Logits Weighting"
+    )
     parser.add_argument(
         "--dist_eval",
         action="store_true",
@@ -291,37 +279,14 @@ def main(args):
         expert.to(device)
         expert.eval()
 
-    dummy_input = dataset_train[0][0]
-    experts_complexity = torch.tensor(
-        [
-            profile(
-                expert,
-                verbose=False,
-                inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
-            )[0]
-            for expert in experts
-        ]
-    ).to(device)
-    complexity_dist = torch.nn.functional.softmax(
-        torch.log(experts_complexity)
-        / torch.max(torch.log(experts_complexity))
-        / args.tau_p,
-        dim=0,
+    router = create_model(
+        args.router,
+        pretrained_cfg_overlay={"n_class": args.num_class, "n_expert": len(experts)},
     )
+    router.to(device)
 
-    model = create_model(args.model, pretrained_cfg_overlay={"n_experts": len(experts)})
-    model.to(device)
-
-    gate_complexity = torch.tensor(
-        profile(
-            model,
-            verbose=False,
-            inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
-        )[0]
-    ).to(device)
-
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print("Model = %s" % str(model))
+    n_parameters = sum(p.numel() for p in router.parameters() if p.requires_grad)
+    print("Router = %s" % str(router))
     print("number of params (M): %.2f" % (n_parameters / 1.0e6))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
@@ -336,34 +301,57 @@ def main(args):
     print("effective batch size: %d" % eff_batch_size)
 
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        router.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
     loss_scaler = NativeScaler()
 
     misc.load_model(
         args=args,
-        model=model,
+        model=router,
         optimizer=optimizer,
         loss_scaler=loss_scaler,
     )
 
     if args.eval:
-        test_stats = evaluate(data_loader_val, model, experts, device)
+        test_stats = (
+            evaluate_lw(data_loader_val, router, [0.8, 0.8], experts, device)
+            if args.logits_weighting
+            else evaluate(data_loader_val, [0.9, 0.9], experts, device)
+        )
         print(
             f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
         )
+        dummy_input = dataset_train[0][0]
+        experts_complexity = torch.tensor(
+            [
+                profile(
+                    expert,
+                    verbose=False,
+                    inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
+                )[0]
+                for expert in experts
+            ]
+        ).to(device)
+        dummy_input = torch.randn(1, len(experts), args.num_class)
+        router_complexity = torch.tensor(
+            profile(
+                router,
+                verbose=False,
+                inputs=(dummy_input.to(device),),
+            )[0]
+        ).to(device)
         distribution_values = ", ".join(
             str(test_stats[key]) for key in test_stats if key.startswith("dist")
         )
         print(f"Distribution: {distribution_values}")
+        print(experts_complexity)
         total_complexity = (
             torch.tensor(
                 [test_stats[key] for key in test_stats if key.startswith("dist")]
             ).to(device)
             / len(dataset_val)
             * experts_complexity
-        ).sum() + gate_complexity
-        print(experts_complexity)
+        ).sum() + router_complexity
         print(f"Complexity: {total_complexity}")
         exit(0)
 
@@ -374,9 +362,8 @@ def main(args):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model,
+            router,
             experts,
-            complexity_dist,
             data_loader_train,
             optimizer,
             device,
@@ -387,30 +374,18 @@ def main(args):
             args=args,
         )
 
-        test_stats = evaluate(data_loader_val, model, experts, device)
+        test_stats = valid(data_loader_val, router, experts, device)
         print(
             f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
         )
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f"Max accuracy: {max_accuracy:.2f}%")
-        distribution_values = ", ".join(
-            str(test_stats[key]) for key in test_stats if key.startswith("dist")
-        )
-        print(f"Distribution: {distribution_values}")
-        total_complexity = (
-            torch.tensor(
-                [test_stats[key] for key in test_stats if key.startswith("dist")]
-            ).to(device)
-            / len(dataset_val)
-            * experts_complexity
-        ).sum() + gate_complexity
-        print(f"Complexity: {total_complexity}")
 
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 misc.save_model(
                     args=args,
-                    model=model,
+                    model=router,
                     optimizer=optimizer,
                     loss_scaler=loss_scaler,
                     epoch=epoch,

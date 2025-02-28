@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-02-18 15:34:32
+LastEditTime: 2025-02-28 16:38:11
 FilePath: /DMMECG/main.py
 Description: training
 
@@ -25,7 +25,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import utils.dns_models as dns_models
 import utils.misc as misc
-from engine import evaluate, evaluate_lw, train_one_epoch, valid
+from engine import evaluate, evaluate_e, train_one_epoch, valid
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 from utils.misc import str2bool
 
@@ -49,7 +49,7 @@ def get_args_parser():
     # Model parameters
     parser.add_argument(
         "--router",
-        default="router_af",
+        default="router",
         type=str,
         metavar="ROUTER",
         help="arch of router",
@@ -157,6 +157,9 @@ def get_args_parser():
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
     parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
+    parser.add_argument(
+        "--eval_thre", default=0.5, type=float, help="Evaluation threshold"
+    )
     parser.add_argument(
         "--logits_weighting", action="store_true", help="Enable Logits Weighting"
     )
@@ -281,8 +284,17 @@ def main(args):
 
     router = create_model(
         args.router,
-        pretrained_cfg_overlay={"n_class": args.num_class, "n_expert": len(experts)},
+        pretrained=True,
+        pretrained_cfg_overlay={
+            "n_expert": len(experts),
+            "n_class": args.num_class,
+        },
     )
+    # freeze all but the head
+    for _, p in router.named_parameters():
+        p.requires_grad = False
+    for _, p in router.head.named_parameters():
+        p.requires_grad = True
     router.to(device)
 
     n_parameters = sum(p.numel() for p in router.parameters() if p.requires_grad)
@@ -314,12 +326,23 @@ def main(args):
 
     if args.eval:
         test_stats = (
-            evaluate_lw(data_loader_val, router, [0.8, 0.8], experts, device)
+            evaluate_e(
+                data_loader_val,
+                router,
+                [args.eval_thre for _ in range(len(experts) - 1)],
+                experts,
+                device,
+            )
             if args.logits_weighting
-            else evaluate(data_loader_val, [0.9, 0.9], experts, device)
+            else evaluate(
+                data_loader_val,
+                [args.eval_thre for _ in range(len(experts) - 1)],
+                experts,
+                device,
+            )
         )
         print(
-            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
+            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.2f}%"
         )
         dummy_input = dataset_train[0][0]
         experts_complexity = torch.tensor(
@@ -332,27 +355,35 @@ def main(args):
                 for expert in experts
             ]
         ).to(device)
-        dummy_input = torch.randn(1, len(experts), args.num_class)
+        cumsum_complexity = torch.cumsum(experts_complexity, dim=0)
         router_complexity = torch.tensor(
             profile(
                 router,
                 verbose=False,
-                inputs=(dummy_input.to(device),),
+                inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
             )[0]
         ).to(device)
         distribution_values = ", ".join(
             str(test_stats[key]) for key in test_stats if key.startswith("dist")
         )
         print(f"Distribution: {distribution_values}")
-        print(experts_complexity)
+        print(cumsum_complexity)
         total_complexity = (
             torch.tensor(
                 [test_stats[key] for key in test_stats if key.startswith("dist")]
             ).to(device)
             / len(dataset_val)
-            * experts_complexity
-        ).sum() + router_complexity
-        print(f"Complexity: {total_complexity}")
+            * cumsum_complexity
+        ).sum()
+        if args.logits_weighting:
+            total_complexity += router_complexity
+        print(f"Complexity: {total_complexity:e}")
+
+        # test_stats = valid(data_loader_val, router, experts, device)
+        # print(
+        #     f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']}%"
+        # )
+
         exit(0)
 
     print(f"Start training for {args.epochs} epochs")
@@ -376,7 +407,7 @@ def main(args):
 
         test_stats = valid(data_loader_val, router, experts, device)
         print(
-            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
+            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.2f}%"
         )
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f"Max accuracy: {max_accuracy:.2f}%")

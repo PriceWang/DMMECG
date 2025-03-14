@@ -1,4 +1,4 @@
-name: dnsecg
+name: dmmecg
 channels:
   - defaults
 dependencies:
@@ -9,6 +9,7 @@ dependencies:
     - torch
     - torchvision
     - timm
+    - thop
     - wfdb
     - neurokit2
     - tqdm

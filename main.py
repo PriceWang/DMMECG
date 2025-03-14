@@ -2,11 +2,11 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-01-08 14:27:53
-FilePath: /DNSECG/training.py
+LastEditTime: 2025-03-11 16:26:16
+FilePath: /DMMECG/main.py
 Description: training
 
-Copyright (c) 2024 by Guoxin Wang, All Rights Reserved. 
+Copyright (c) 2024 by Guoxin Wang, All Rights Reserved.
 """
 
 import argparse
@@ -23,22 +23,22 @@ from thop import profile
 from timm.models import create_model
 from torch.utils.tensorboard import SummaryWriter
 
-import utils.dns_models as dns_models
+import utils.dmm_models
 import utils.misc as misc
-from engine import evaluate, train_one_epoch
+from engine import evaluate, evaluate_pw, train_one_epoch, valid
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 from utils.misc import str2bool
 
 
-def get_args_parser():
-    parser = argparse.ArgumentParser("DNS training", add_help=False)
+def get_args_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser("DMM training", add_help=False)
     parser.add_argument(
         "--batch_size",
         default=1024,
         type=int,
         help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus",
     )
-    parser.add_argument("--epochs", default=20, type=int)
+    parser.add_argument("--epochs", default=200, type=int)
     parser.add_argument(
         "--accum_iter",
         default=1,
@@ -48,18 +48,19 @@ def get_args_parser():
 
     # Model parameters
     parser.add_argument(
-        "--model",
-        default="gate_af",
+        "--gate",
+        default="gate_vit",
         type=str,
-        metavar="MODEL",
-        help="Name of model of gate",
+        metavar="GATE",
+        help="arch of gate",
     )
+    parser.add_argument("--freeze_head", action="store_true", dest="freeze_head")
     parser.add_argument(
         "--experts",
         default=[
-            "vit_atto_af",
             "vit_tiny_af",
             "vit_small_af",
+            "vit_base_af",
         ],
         nargs="+",
         type=str,
@@ -104,34 +105,12 @@ def get_args_parser():
     parser.add_argument(
         "--warmup_epochs", type=int, default=40, metavar="N", help="epochs to warmup LR"
     )
-    parser.add_argument(
-        "--tau_g",
-        type=float,
-        default=1,
-        help="temperature for gate in training epoch",
-    )
-    parser.add_argument(
-        "--tau_p",
-        type=float,
-        default=1,
-        help="temperature for penalty in training epoch",
-    )
-    parser.add_argument(
-        "--lam", type=float, default=0.5, metavar="L", help="lambda in training epoch"
-    )
-
-    # Augmentation parameters
-    parser.add_argument(
-        "--smoothing", type=float, default=0.1, help="Label smoothing (default: 0.1)"
-    )
 
     # Dataset parameters
     parser.add_argument(
         "--train_path",
         default=[
-            # "datasets/challenge-2021/ul_beat.pth",
             "datasets/mitdb/af_beat_4_train.pth",
-            # "datasets/mitdb/af_beat_4_valid.pth",
             "datasets/incartdb/af_beat_4_train.pth",
             "datasets/incartdb/af_beat_4_valid.pth",
             "datasets/incartdb/af_beat_4_test.pth",
@@ -171,7 +150,18 @@ def get_args_parser():
     parser.add_argument(
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
-    parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
+    parser.add_argument(
+        "--eval", action="store_true", default=False, help="Perform evaluation only"
+    )
+    parser.add_argument(
+        "--eval_thre", default=0.5, type=float, help="Evaluation threshold"
+    )
+    parser.add_argument(
+        "--probs_weighting",
+        action="store_true",
+        default=False,
+        help="Enable Probs Weighting",
+    )
     parser.add_argument(
         "--dist_eval",
         action="store_true",
@@ -200,7 +190,7 @@ def get_args_parser():
     return parser
 
 
-def main(args):
+def main(args: argparse.ArgumentParser) -> None:
     misc.init_distributed_mode(args)
 
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
@@ -291,37 +281,24 @@ def main(args):
         expert.to(device)
         expert.eval()
 
-    dummy_input = dataset_train[0][0]
-    experts_complexity = torch.tensor(
-        [
-            profile(
-                expert,
-                verbose=False,
-                inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
-            )[0]
-            for expert in experts
-        ]
-    ).to(device)
-    complexity_dist = torch.nn.functional.softmax(
-        torch.log(experts_complexity)
-        / torch.max(torch.log(experts_complexity))
-        / args.tau_p,
-        dim=0,
+    gate = create_model(
+        args.gate,
+        pretrained=True,
+        pretrained_cfg_overlay={
+            "n_expert": len(experts),
+            "n_class": args.num_class,
+        },
     )
+    if args.freeze_head:
+        # freeze all but the head
+        for _, p in gate.named_parameters():
+            p.requires_grad = False
+        for _, p in gate.head.named_parameters():
+            p.requires_grad = True
+    gate.to(device)
 
-    model = create_model(args.model, pretrained_cfg_overlay={"n_experts": len(experts)})
-    model.to(device)
-
-    gate_complexity = torch.tensor(
-        profile(
-            model,
-            verbose=False,
-            inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
-        )[0]
-    ).to(device)
-
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print("Model = %s" % str(model))
+    n_parameters = sum(p.numel() for p in gate.parameters() if p.requires_grad)
+    print("Gate = %s" % str(gate))
     print("number of params (M): %.2f" % (n_parameters / 1.0e6))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
@@ -336,35 +313,72 @@ def main(args):
     print("effective batch size: %d" % eff_batch_size)
 
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        gate.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
     loss_scaler = NativeScaler()
 
     misc.load_model(
         args=args,
-        model=model,
+        model=gate,
         optimizer=optimizer,
         loss_scaler=loss_scaler,
     )
 
     if args.eval:
-        test_stats = evaluate(data_loader_val, model, experts, device)
-        print(
-            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
+        test_stats = (
+            evaluate_pw(
+                data_loader_val,
+                gate,
+                [args.eval_thre for _ in range(len(experts) - 1)],
+                experts,
+                device,
+            )
+            if args.probs_weighting
+            else evaluate(
+                data_loader_val,
+                [args.eval_thre for _ in range(len(experts) - 1)],
+                experts,
+                device,
+            )
         )
+        print(
+            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.2f}%"
+        )
+        dummy_input = dataset_train[0][0]
+        experts_complexity = torch.tensor(
+            [
+                profile(
+                    expert,
+                    verbose=False,
+                    inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
+                )[0]
+                for expert in experts
+            ]
+        ).to(device)
+        cumsum_complexity = torch.cumsum(experts_complexity, dim=0)
+        gate_complexity = torch.tensor(
+            profile(
+                gate,
+                verbose=False,
+                inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
+            )[0]
+        ).to(device)
         distribution_values = ", ".join(
             str(test_stats[key]) for key in test_stats if key.startswith("dist")
         )
         print(f"Distribution: {distribution_values}")
+        print(cumsum_complexity)
         total_complexity = (
             torch.tensor(
                 [test_stats[key] for key in test_stats if key.startswith("dist")]
             ).to(device)
             / len(dataset_val)
-            * experts_complexity
-        ).sum() + gate_complexity
-        print(experts_complexity)
-        print(f"Complexity: {total_complexity}")
+            * cumsum_complexity
+        ).sum()
+        if args.probs_weighting:
+            total_complexity += gate_complexity
+        print(f"Complexity: {total_complexity:e}")
+
         exit(0)
 
     print(f"Start training for {args.epochs} epochs")
@@ -374,9 +388,8 @@ def main(args):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model,
+            gate,
             experts,
-            complexity_dist,
             data_loader_train,
             optimizer,
             device,
@@ -387,30 +400,18 @@ def main(args):
             args=args,
         )
 
-        test_stats = evaluate(data_loader_val, model, experts, device)
+        test_stats = valid(data_loader_val, gate, experts, device)
         print(
-            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.1f}%"
+            f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.2f}%"
         )
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f"Max accuracy: {max_accuracy:.2f}%")
-        distribution_values = ", ".join(
-            str(test_stats[key]) for key in test_stats if key.startswith("dist")
-        )
-        print(f"Distribution: {distribution_values}")
-        total_complexity = (
-            torch.tensor(
-                [test_stats[key] for key in test_stats if key.startswith("dist")]
-            ).to(device)
-            / len(dataset_val)
-            * experts_complexity
-        ).sum() + gate_complexity
-        print(f"Complexity: {total_complexity}")
 
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 misc.save_model(
                     args=args,
-                    model=model,
+                    model=gate,
                     optimizer=optimizer,
                     loss_scaler=loss_scaler,
                     epoch=epoch,

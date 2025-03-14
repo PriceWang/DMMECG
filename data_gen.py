@@ -1,12 +1,12 @@
 """
 Author: Guoxin Wang
-Date: 2022-10-27 13:45:59
+Date: 2024-11-28 12:35:49
 LastEditors: Guoxin Wang
-LastEditTime: 2024-12-02 13:34:57
-FilePath: /DNSECG/dataprocess.py
-Description: 
+LastEditTime: 2025-03-11 11:14:49
+FilePath: /DMMECG/data_gen.py
+Description:
 
-Copyright (c) 2022 by Guoxin Wang, All Rights Reserved. 
+Copyright (c) 2025 by Guoxin Wang, All Rights Reserved.
 """
 
 import argparse
@@ -18,14 +18,14 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from utils.data_utils import ECG_Beat_AF, ECG_Beat_AU, ECG_Beat_DN, ECG_Beat_UL
+from utils.data_utils import ECG_Beat_AF, ECG_Beat_ID
 
-parser = argparse.ArgumentParser(description="Data Processing")
+parser = argparse.ArgumentParser(description="Data Generation")
 parser.add_argument(
     "--task",
     required=True,
     type=str,
-    choices=["ul_beat", "af_beat", "au_beat", "dn_beat"],
+    choices=["af_beat", "id_beat"],
     help="target task",
 )
 parser.add_argument(
@@ -59,14 +59,8 @@ parser.add_argument(
     help="list of channels to use",
 )
 parser.add_argument(
-    "--channel_names_wn",
-    default=None,
-    action="append",
-    help="list of channels to use (with noise)",
-)
-parser.add_argument(
     "--num_class",
-    default=5,
+    default=4,
     type=int,
     help="number of classes",
 )
@@ -83,27 +77,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     level=logging.INFO,
 )
-
-
-def ul_beat() -> None:
-    files = np.array(
-        [
-            os.path.join(path, file_name.split(".")[0])
-            for path, _, file_list in os.walk(args.data_path)
-            for file_name in file_list
-            if file_name.endswith(".hea")
-        ]
-    )
-    unlabeled_set = ECG_Beat_UL(
-        files=files,
-        width=args.width,
-        channel_names=args.channel_names,
-        expansion=args.expansion,
-    )
-    torch.save(
-        unlabeled_set,
-        "{}/{}.pth".format(args.output_dir, args.task),
-    )
 
 
 def af_beat() -> None:
@@ -248,13 +221,13 @@ def af_beat() -> None:
         )
 
 
-def au_beat() -> None:
+def id_beat() -> None:
     folders = [
         os.path.join(args.data_path, folder)
         for folder in os.listdir(args.data_path)
         if folder.startswith(args.prefix)
     ]
-    dataset = ECG_Beat_AU(
+    dataset = ECG_Beat_ID(
         folders=folders,
         width=args.width,
         channel_names=args.channel_names,
@@ -285,49 +258,15 @@ def au_beat() -> None:
     )
 
 
-def dn_beat() -> None:
-    folders = [
-        os.path.join(args.data_path, folder)
-        for folder in os.listdir(args.data_path)
-        if folder.startswith(args.prefix)
-    ]
-    dataset = ECG_Beat_DN(
-        folders=folders,
-        width=args.width,
-        channel_names_wn=args.channel_names_wn,
-        channel_names_won=args.channel_names,
-        expansion=args.expansion,
-    )
-    train_size = int(0.7 * len(dataset))
-    train_set = copy.deepcopy(dataset)
-    test_set = copy.deepcopy(dataset)
-    train_set.signals_wn = dataset.signals_wn[:train_size]
-    train_set.signals_won = dataset.signals_won[:train_size]
-    test_set.signals_wn = dataset.signals_wn[train_size:]
-    test_set.signals_won = dataset.signals_won[train_size:]
-    torch.save(
-        train_set,
-        "{}/{}_train.pth".format(args.output_dir, args.task),
-    )
-    torch.save(
-        test_set,
-        "{}/{}_test.pth".format(args.output_dir, args.task),
-    )
-
-
 def main() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    logger.info("Data Generating for Task {}".format(args.task))
-    if args.task == "ul_beat":
-        ul_beat()
-    elif args.task == "af_beat":
+    logger.info("Data Generation for Task {}".format(args.task))
+    if args.task == "af_beat":
         af_beat()
-    elif args.task == "au_beat":
-        au_beat()
-    elif args.task == "dn_beat":
-        dn_beat()
+    elif args.task == "id_beat":
+        id_beat()
 
 
 if __name__ == "__main__":

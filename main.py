@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-03-11 16:26:16
+LastEditTime: 2025-06-04 15:23:53
 FilePath: /DMMECG/main.py
 Description: training
 
@@ -47,14 +47,6 @@ def get_args_parser() -> argparse.ArgumentParser:
     )
 
     # Model parameters
-    parser.add_argument(
-        "--gate",
-        default="gate_vit",
-        type=str,
-        metavar="GATE",
-        help="arch of gate",
-    )
-    parser.add_argument("--freeze_head", action="store_true", dest="freeze_head")
     parser.add_argument(
         "--experts",
         default=[
@@ -282,19 +274,14 @@ def main(args: argparse.ArgumentParser) -> None:
         expert.eval()
 
     gate = create_model(
-        args.gate,
+        "gate",
         pretrained=True,
         pretrained_cfg_overlay={
+            "embed_dim": experts[0].embed_dim,
             "n_expert": len(experts),
             "n_class": args.num_class,
         },
     )
-    if args.freeze_head:
-        # freeze all but the head
-        for _, p in gate.named_parameters():
-            p.requires_grad = False
-        for _, p in gate.head.named_parameters():
-            p.requires_grad = True
     gate.to(device)
 
     n_parameters = sum(p.numel() for p in gate.parameters() if p.requires_grad)

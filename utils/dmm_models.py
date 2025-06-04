@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2025-01-08 14:29:16
 LastEditors: Guoxin Wang
-LastEditTime: 2025-03-14 14:40:56
+LastEditTime: 2025-06-04 15:38:34
 FilePath: /DMMECG/utils/dmm_models.py
 Description:
 
@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.models import create_model, register_model
+from timm.models import register_model
 from timm.models._builder import load_pretrained
 from timm.models.vision_transformer import Block
 
@@ -98,6 +98,7 @@ class ViT1D(nn.Module):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.embed_dim = embed_dim
         self.patch_embed = PatchEmbed1D(signal_length, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
         self.pos_embed = nn.Parameter(
@@ -124,13 +125,22 @@ class ViT1D(nn.Module):
             nn.AdaptiveAvgPool1d(1), nn.Flatten(), MLP(embed_dim, mlp_sizes)
         )
 
-    def forward(self, x: torch.Tensor):
+    def forward_features(self, x: torch.Tensor):
         x = self.patch_embed(x)
         x = x + self.pos_embed
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-        x = self.head(x.transpose(1, 2))
+        x = x.transpose(1, 2)
+        return x
+
+    def forward_head(self, x: torch.Tensor):
+        x = self.head(x)
+        return x
+
+    def forward(self, x: torch.Tensor):
+        feat = self.forward_features(x)
+        x = self.forward_head(feat)
         return x
 
     def freeze_backbone(self):
@@ -171,38 +181,6 @@ class ViT1D(nn.Module):
 
 
 @register_model
-def vit_atto(
-    pretrained: bool = False,
-    pretrained_cfg: Optional[Dict[str, Any]] = None,
-    pretrained_cfg_overlay: Optional[Dict[str, Any]] = None,
-    cache_dir: Optional[str] = None,
-    **kwargs,
-) -> nn.Module:
-    if pretrained_cfg is None:
-        pretrained_cfg = {}
-    if pretrained_cfg_overlay is None:
-        pretrained_cfg_overlay = {}
-    model = ViT1D(
-        embed_dim=96,
-        depth=1,
-        num_heads=2,
-        mlp_ratio=1,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        mlp_sizes=[4],
-        **kwargs,
-    )
-    if pretrained:
-        if pretrained_cfg_overlay.get("path", None):
-            pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
-        else:
-            pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_atto.pth"
-            )
-        load_pretrained(model, pretrained_cfg, strict=False)
-    return model
-
-
-@register_model
 def vit_tiny_af(
     pretrained: bool = False,
     pretrained_cfg: Optional[Dict[str, Any]] = None,
@@ -228,9 +206,9 @@ def vit_tiny_af(
             pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
         else:
             pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_tiny_af.pth"
+                "https://huggingface.co/PriceWang/dmmecg/resolve/main/vit_tiny_af.pth"
             )
-        load_pretrained(model, pretrained_cfg, strict=False)
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model
 
 
@@ -260,9 +238,9 @@ def vit_small_af(
             pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
         else:
             pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_small_af.pth"
+                "https://huggingface.co/PriceWang/dmmecg/resolve/main/vit_small_af.pth"
             )
-        load_pretrained(model, pretrained_cfg, strict=False)
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model
 
 
@@ -292,9 +270,9 @@ def vit_base_af(
             pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
         else:
             pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_base_af.pth"
+                "https://huggingface.co/PriceWang/dmmecg/resolve/main/vit_base_af.pth"
             )
-        load_pretrained(model, pretrained_cfg, strict=False)
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model
 
 
@@ -324,9 +302,9 @@ def vit_tiny_id(
             pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
         else:
             pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_tiny_id.pth"
+                "https://huggingface.co/PriceWang/dmmecg/resolve/main/vit_tiny_id.pth"
             )
-        load_pretrained(model, pretrained_cfg, strict=False)
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model
 
 
@@ -356,9 +334,9 @@ def vit_small_id(
             pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
         else:
             pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_small_id.pth"
+                "https://huggingface.co/PriceWang/dmmecg/resolve/main/vit_small_id.pth"
             )
-        load_pretrained(model, pretrained_cfg, strict=False)
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model
 
 
@@ -388,14 +366,14 @@ def vit_base_id(
             pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
         else:
             pretrained_cfg["url"] = (
-                "https://huggingface.co/PriceWang/model/resolve/main/dmmecg/vit_base_id.pth"
+                "https://huggingface.co/PriceWang/dmmecg/resolve/main/vit_base_id.pth"
             )
-        load_pretrained(model, pretrained_cfg, strict=False)
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model
 
 
 @register_model
-def gate_mlp(
+def gate(
     pretrained: bool = False,
     pretrained_cfg: Optional[Dict[str, Any]] = None,
     pretrained_cfg_overlay: Optional[Dict[str, Any]] = None,
@@ -406,32 +384,11 @@ def gate_mlp(
         pretrained_cfg = {}
     if pretrained_cfg_overlay is None:
         pretrained_cfg_overlay = {}
-    n_expert = (
-        pretrained_cfg_overlay["n_expert"]
-        if pretrained_cfg_overlay.get("n_expert", None)
-        else 3
+    embed_dim = (
+        pretrained_cfg_overlay["embed_dim"]
+        if pretrained_cfg_overlay.get("embed_dim", None)
+        else 96
     )
-    n_class = (
-        pretrained_cfg_overlay["n_class"]
-        if pretrained_cfg_overlay.get("n_class", None)
-        else 4
-    )
-    model = nn.Sequential(MLP(480, [240, n_expert * n_class]))
-    return model
-
-
-@register_model
-def gate_cnn(
-    pretrained: bool = False,
-    pretrained_cfg: Optional[Dict[str, Any]] = None,
-    pretrained_cfg_overlay: Optional[Dict[str, Any]] = None,
-    cache_dir: Optional[str] = None,
-    **kwargs,
-) -> nn.Module:
-    if pretrained_cfg is None:
-        pretrained_cfg = {}
-    if pretrained_cfg_overlay is None:
-        pretrained_cfg_overlay = {}
     n_expert = (
         pretrained_cfg_overlay["n_expert"]
         if pretrained_cfg_overlay.get("n_expert", None)
@@ -443,67 +400,24 @@ def gate_cnn(
         else 4
     )
 
-    class CNN1D(nn.Module):
+    class GATE1D(nn.Module):
         def __init__(self):
             super().__init__()
-            self.conv1 = nn.Conv1d(1, 32, 5)
-            self.conv2 = nn.Conv1d(32, 64, 5)
-
-            self.fc1 = nn.Linear(64 * 117, 480)
-            self.fc2 = nn.Linear(480, n_expert * n_class)
+            self.gate = nn.Sequential(
+                nn.AdaptiveAvgPool1d(1),
+                nn.Flatten(),
+                MLP(embed_dim, [n_expert * n_class]),
+            )
 
         def forward(self, x: torch.Tensor):
-            x = F.max_pool1d(F.relu(self.conv1(x)), 2)
-            x = F.max_pool1d(F.relu(self.conv2(x)), 2)
-            x = x.view(x.size(0), -1)
-            x = F.relu(self.fc1(x))
-            x = self.fc2(x)
+            x = self.gate(x)
             return x
 
-    model = CNN1D()
-    return model
-
-
-@register_model
-def gate_vit(
-    pretrained: bool = False,
-    pretrained_cfg: Optional[Dict[str, Any]] = None,
-    pretrained_cfg_overlay: Optional[Dict[str, Any]] = None,
-    cache_dir: Optional[str] = None,
-    **kwargs,
-) -> nn.Module:
-    if pretrained_cfg is None:
-        pretrained_cfg = {}
-    if pretrained_cfg_overlay is None:
-        pretrained_cfg_overlay = {}
-    n_expert = (
-        pretrained_cfg_overlay["n_expert"]
-        if pretrained_cfg_overlay.get("n_expert", None)
-        else 3
-    )
-    n_class = (
-        pretrained_cfg_overlay["n_class"]
-        if pretrained_cfg_overlay.get("n_class", None)
-        else 4
-    )
-    model = ViT1D(
-        embed_dim=96,
-        depth=1,
-        num_heads=2,
-        mlp_ratio=1,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        mlp_sizes=[n_expert * n_class],
-        **kwargs,
-    )
-    checkpoint = create_model(
-        ("vit_atto"),
-        pretrained=pretrained,
-    ).state_dict()
-    remove_keys = []
-    for k in checkpoint.keys():
-        if k.startswith("head"):
-            remove_keys.append(k)
-    for k in remove_keys:
-        del checkpoint[k]
-    model.load_state_dict(checkpoint, strict=False)
+    model = GATE1D()
+    if pretrained:
+        if pretrained_cfg_overlay.get("path", None):
+            pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
+        else:
+            pretrained_cfg["url"] = ""
+        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model

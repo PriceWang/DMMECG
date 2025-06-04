@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-03-11 16:20:48
+LastEditTime: 2025-05-22 17:10:11
 FilePath: /DMMECG/engine.py
 Description:
 
@@ -64,10 +64,15 @@ def train_one_epoch(
         targets = targets.view(-1, 1)
 
         with torch.amp.autocast(device.type):
+            experts_feats = [expert.forward_features(samples) for expert in experts]
             experts_probs = torch.stack(
-                [softmax(expert(samples), dim=1) for expert in experts], dim=1
+                [
+                    softmax(expert.forward_head(expert_feats), dim=1)
+                    for expert, expert_feats in zip(experts, experts_feats)
+                ],
+                dim=1,
             )
-            weights = gate(samples).view(experts_probs.shape)
+            weights = gate(experts_feats[0]).view(experts_probs.shape)
             loss = 0
 
             for expert_idx in range(1, len(experts)):
@@ -154,10 +159,16 @@ def valid(
 
         # compute output
         with torch.amp.autocast(device.type):
+            experts_feats = [expert.forward_features(samples) for expert in experts]
             experts_probs = torch.stack(
-                [softmax(expert(samples), dim=1) for expert in experts], dim=1
+                [
+                    softmax(expert.forward_head(expert_feats), dim=1)
+                    for expert, expert_feats in zip(experts, experts_feats)
+                ],
+                dim=1,
             )
-            weights = gate(samples).view(experts_probs.shape)
+            weights = gate(experts_feats[0]).view(experts_probs.shape)
+
             norm_weights = softmax(weights, dim=1)
             weighted_probs = (experts_probs * (norm_weights)).sum(dim=1)
 
@@ -283,7 +294,7 @@ def evaluate_pw(
         batch_size = samples.size(0)
         # compute output
         with torch.amp.autocast(device.type):
-            weights = gate(samples).view(batch_size, len(experts), -1)
+            weights = None
             outputs = None
             prev_probs = None
             indices = torch.arange(batch_size, device=samples.device)
@@ -294,7 +305,10 @@ def evaluate_pw(
                         metric_logger.meters[f"dist{left_idx}"].update(0)
                     break
                 if expert_idx == 0:
-                    expert_probs = softmax(expert(samples[inference_indices]), dim=1)
+                    expert_feats = expert.forward_features(samples[inference_indices])
+                    expert_probs = softmax(expert.forward_head(expert_feats), dim=1)
+                    weights = gate(expert_feats).view(batch_size, len(experts), -1)
+
                     outputs = torch.zeros(
                         expert_probs.size(),
                         dtype=expert_probs.dtype,

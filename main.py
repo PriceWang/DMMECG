@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2023-07-01 16:36:58
 LastEditors: Guoxin Wang
-LastEditTime: 2025-06-04 15:23:53
+LastEditTime: 2025-11-20 13:04:53
 FilePath: /DMMECG/main.py
 Description: training
 
@@ -58,6 +58,13 @@ def get_args_parser() -> argparse.ArgumentParser:
         type=str,
         metavar="EXPERT",
         help="Name of experts to select",
+    )
+    parser.add_argument(
+        "--pool",
+        default="avg",
+        choices=["none", "avg"],
+        type=str,
+        help="Type of pooling for the gate model (default: avg, other options: none)",
     )
 
     # Optimizer parameters
@@ -275,11 +282,11 @@ def main(args: argparse.ArgumentParser) -> None:
 
     gate = create_model(
         "gate",
-        pretrained=True,
         pretrained_cfg_overlay={
             "embed_dim": experts[0].embed_dim,
             "n_expert": len(experts),
             "n_class": args.num_class,
+            "pool": args.pool,
         },
     )
     gate.to(device)
@@ -331,13 +338,13 @@ def main(args: argparse.ArgumentParser) -> None:
         print(
             f"Accuracy of the network on the {len(dataset_val)} test ECGs: {test_stats['acc1']:.2f}%"
         )
-        dummy_input = dataset_train[0][0]
+        dummy_input = dataset_train[0][0].unsqueeze(0).unsqueeze(0).to(device)
         experts_complexity = torch.tensor(
             [
                 profile(
                     expert,
                     verbose=False,
-                    inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
+                    inputs=(dummy_input,),
                 )[0]
                 for expert in experts
             ]
@@ -347,7 +354,7 @@ def main(args: argparse.ArgumentParser) -> None:
             profile(
                 gate,
                 verbose=False,
-                inputs=(dummy_input.unsqueeze(0).unsqueeze(0).to(device),),
+                inputs=(experts[0].forward_features(dummy_input),),
             )[0]
         ).to(device)
         distribution_values = ", ".join(

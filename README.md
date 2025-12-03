@@ -2,7 +2,7 @@
  * @Author: Guoxin Wang
  * @Date: 2025-03-19 16:20:13
  * @LastEditors: Guoxin Wang
- * @LastEditTime: 2025-03-28 13:45:04
+ * @LastEditTime: 2025-11-20 12:34:53
  * @FilePath: /DMMECG/README.md
  * @Description:
  *
@@ -49,21 +49,21 @@ python data_gen.py \
     --num_class 4
 ```
 
-- Choose `task` from _af_beat_ and _id_beat_.
-- Set `--prefix ${prefix}` when original data path is nested.
-- Set `--num_class 2` or `--num_class 5` for different classifications.
-- Set `--inter` to generate datasets from MITDB with special splits.
-- Set `--expansion ${expansion}` for simple data augumentation.
+-   Choose `task` from _af_beat_ and _id_beat_.
+-   Set `--prefix ${prefix}` when original data path is nested.
+-   Set `--num_class 2` or `--num_class 5` for different classifications.
+-   Set `--inter` to generate datasets from MITDB with special splits.
+-   Set `--expansion ${expansion}` for simple data augumentation.
 
 ### Gate Training
 
 To train a gate with multi-node distributed training, run the following on 1 node with 2 GPUs each:
 
 ```
-OMP_NUM_THREADS=20 torchrun --nnodes=1 --nproc-per-node=2 main_pretrain.py \
+OMP_NUM_THREADS=20 torchrun --nnodes=1 --nproc-per-node=2 main.py \
     --batch_size 512 \
-    --gate ${gate} \
     --experts ${experts} \
+    --pool ${pool} \
     --lr 3e-4 \
     --train_path ${train_path} \
     --test_path ${test_path} \
@@ -71,10 +71,10 @@ OMP_NUM_THREADS=20 torchrun --nnodes=1 --nproc-per-node=2 main_pretrain.py \
     --log_dir ${log_dir}
 ```
 
-- Here the effective batch size is 512 (`batch_size` per gpu) \* 1 (nodes) \* 2 (gpus per node) \* 1 (`accum_iter`) = 1024.
-- Choose `gate` from _gate_vit_, _gate_cnn_ and _gate_mlp_. Register customized architectures in _utils/dmm_models.py_ to evaluate more.
-- Experts are pre-trained from [MAECG](https://github.com/PriceWang/MAECG/tree/main). Set `--experts vit_tiny_${task} vit_small_${task} vit_base_${task}` with _af_ or _id_ for different tasks. Register customized architectures in _utils/dmm_models.py_ to evaluate more (make sure the shape is consistent).
-- Set `--train_path ${data_path_1} ${data_path_2} ...` and `--test_path ${data_path_1} ${data_path_2} ...` to train and valid with multiple datasets.
+-   Here the effective batch size is 512 (`batch_size` per gpu) \* 1 (nodes) \* 2 (gpus per node) \* 1 (`accum_iter`) = 1024.
+-   Experts are pre-trained from [MAECG](https://github.com/PriceWang/MAECG/tree/main). Set `--experts vit_tiny_${task} vit_small_${task} vit_base_${task}` with _af_ or _id_ for different tasks. Register customized architectures in [_utils/dmm_models.py_](./utils/dmm_models.py) to evaluate more (make sure the shape is consistent).
+-   Base on experts architecture, choose `pool` from _avg_ and _none_.
+-   Set `--train_path ${data_path_1} ${data_path_2} ...` and `--test_path ${data_path_1} ${data_path_2} ...` to train and valid with multiple datasets.
 
 ### Evaluation
 
@@ -82,14 +82,15 @@ Evaluate arrhythmia classification and human identification on test dataset in a
 
 ```
 python main.py \
-    --gate ${gate} \
     --experts ${experts} \
+    --pool ${pool} \
     --test_path ${test_path} \
     --output_dir ${gate_ckpt} \
     --eval_thre ${threshold} \
-    --probs_weighting \
     --eval
 ```
+
+-   Set `--probs_weighting` to enable probability weighting.
 
 ### Results
 

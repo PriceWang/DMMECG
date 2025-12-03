@@ -2,7 +2,7 @@
 Author: Guoxin Wang
 Date: 2025-01-08 14:29:16
 LastEditors: Guoxin Wang
-LastEditTime: 2025-06-04 15:38:34
+LastEditTime: 2025-11-20 13:00:44
 FilePath: /DMMECG/utils/dmm_models.py
 Description:
 
@@ -178,6 +178,46 @@ class ViT1D(nn.Module):
             x = torch.einsum("nlpc->nclp", x)
             signals = x.reshape(shape=(N, C, L * p))
         return signals
+
+
+class CNN1D(nn.Module):
+    def __init__(self, signal_length: int = 480, in_chans: int = 1, layers=5):
+        super(CNN1D, self).__init__()
+        self.cnn_layers = nn.ModuleList()
+        current_channels = in_chans
+        for i in range(layers):
+            conv = nn.Conv1d(
+                in_channels=current_channels,
+                out_channels=16 * (2**i),
+                kernel_size=3,
+                padding=1,
+            )
+            pool = nn.MaxPool1d(kernel_size=2)
+            self.cnn_layers.append(nn.Sequential(conv, nn.ReLU(), pool))
+            current_channels = 16 * (2**i)
+        reduced_length = signal_length // (2**layers)
+        self.embed_dim = current_channels * reduced_length
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(self.embed_dim, 128)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 4)
+
+    def forward_features(self, x):
+        for layer in self.cnn_layers:
+            x = layer(x)
+        return x
+
+    def forward_head(self, x):
+        x = self.flatten(x)
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+    def forward(self, x):
+        x = self.forward_features(x)
+        x = self.forward_head(x)
+        return x
 
 
 @register_model
@@ -399,12 +439,17 @@ def gate(
         if pretrained_cfg_overlay.get("n_class", None)
         else 4
     )
+    pool_fc = pretrained_cfg_overlay.get("pool", "none")
 
     class GATE1D(nn.Module):
         def __init__(self):
             super().__init__()
+            if pool_fc == "avg":
+                pool = nn.AdaptiveAvgPool1d(1)
+            else:
+                pool = nn.Identity()
             self.gate = nn.Sequential(
-                nn.AdaptiveAvgPool1d(1),
+                pool,
                 nn.Flatten(),
                 MLP(embed_dim, [n_expert * n_class]),
             )
@@ -414,10 +459,4 @@ def gate(
             return x
 
     model = GATE1D()
-    if pretrained:
-        if pretrained_cfg_overlay.get("path", None):
-            pretrained_cfg["file"] = pretrained_cfg_overlay["path"]
-        else:
-            pretrained_cfg["url"] = ""
-        load_pretrained(model, pretrained_cfg, strict=False, cache_dir=cache_dir)
     return model

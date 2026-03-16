@@ -2,7 +2,7 @@
  * @Author: Guoxin Wang
  * @Date: 2025-03-19 16:20:13
  * @LastEditors: Guoxin Wang
- * @LastEditTime: 2025-11-20 12:34:53
+ * @LastEditTime: 2026-03-16 17:33:31
  * @FilePath: /DMMECG/README.md
  * @Description:
  *
@@ -12,13 +12,19 @@
 ## DMMECG: Dynamic Model Mixture for Electrocardiogram
 
 <p align="center">
-  <img src="https://private-user-images.githubusercontent.com/30796250/428045663-b69ea66c-d4a4-4118-94b4-6d515a1d596b.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDMxNjk2MzIsIm5iZiI6MTc0MzE2OTMzMiwicGF0aCI6Ii8zMDc5NjI1MC80MjgwNDU2NjMtYjY5ZWE2NmMtZDRhNC00MTE4LTk0YjQtNmQ1MTVhMWQ1OTZiLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMjglMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzI4VDEzNDIxMlomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWI2MTY3NjYzN2Y5ZDU2NjQ3MzY1NzYxOGUyZDZjMzAwODU4NTQ5N2UyMzA0NDk4Mzg5MDU0ZDQ0Y2JkNjUxYjkmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.E9YEUqgHj-pf3YbrSdtZU17sDwWomQC0hhP4-lL3G4M" width="100%">
+  <img src="https://private-user-images.githubusercontent.com/30796250/564310477-5bdfa7db-a7e0-4d30-845a-31762ea0161e.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzM2ODI2OTUsIm5iZiI6MTc3MzY4MjM5NSwicGF0aCI6Ii8zMDc5NjI1MC81NjQzMTA0NzctNWJkZmE3ZGItYTdlMC00ZDMwLTg0NWEtMzE3NjJlYTAxNjFlLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjAzMTYlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwMzE2VDE3MzMxNVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWJjMDUwNjJhYWI0NTVlMzIzNjY5MDAwMzVhZWY2YjMzMmUxZjk3MTBmNDc3YjI4NmI5ZjljYWJkMTU5YTQxMDImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.lrUwtIKOUiMk_JXWLwGwzbZzmDeIfwTkxOzAN8xTvPI" width="100%">
 </p>
 
-This is a PyTorch/GPU implementation of the paper [DMMECG](https://ieeexplore.ieee.org/document/10541906):
+This is a PyTorch/GPU implementation of the paper [DMMECG](https://ieeexplore.ieee.org/document/11426826):
 
 ```
-tem
+@article{wang2026dynamic,
+  title={Dynamic Model Mixtures for Efficient AI Inference in Real-Time Biomedical Applications},
+  author={Wang, Guoxin and Wang, Qingyuan and Iyer, Ganesh Neelakanta and John, Deepu},
+  journal={IEEE Transactions on Instrumentation and Measurement},
+  year={2026},
+  publisher={IEEE}
+}
 ```
 
 ### Requirement
@@ -49,11 +55,11 @@ python data_gen.py \
     --num_class 4
 ```
 
--   Choose `task` from _af_beat_ and _id_beat_.
--   Set `--prefix ${prefix}` when original data path is nested.
--   Set `--num_class 2` or `--num_class 5` for different classifications.
--   Set `--inter` to generate datasets from MITDB with special splits.
--   Set `--expansion ${expansion}` for simple data augumentation.
+- Choose `task` from _af_beat_ and _id_beat_.
+- Set `--prefix ${prefix}` when original data path is nested.
+- Set `--num_class 2` or `--num_class 5` for different classifications.
+- Set `--inter` to generate datasets from MITDB with special splits.
+- Set `--expansion ${expansion}` for simple data augumentation.
 
 ### Gate Training
 
@@ -71,10 +77,10 @@ OMP_NUM_THREADS=20 torchrun --nnodes=1 --nproc-per-node=2 main.py \
     --log_dir ${log_dir}
 ```
 
--   Here the effective batch size is 512 (`batch_size` per gpu) \* 1 (nodes) \* 2 (gpus per node) \* 1 (`accum_iter`) = 1024.
--   Experts are pre-trained from [MAECG](https://github.com/PriceWang/MAECG/tree/main). Set `--experts vit_tiny_${task} vit_small_${task} vit_base_${task}` with _af_ or _id_ for different tasks. Register customized architectures in [_utils/dmm_models.py_](./utils/dmm_models.py) to evaluate more (make sure the shape is consistent).
--   Base on experts architecture, choose `pool` from _avg_ and _none_.
--   Set `--train_path ${data_path_1} ${data_path_2} ...` and `--test_path ${data_path_1} ${data_path_2} ...` to train and valid with multiple datasets.
+- Here the effective batch size is 512 (`batch_size` per gpu) \* 1 (nodes) \* 2 (gpus per node) \* 1 (`accum_iter`) = 1024.
+- Experts are pre-trained from [MAECG](https://github.com/PriceWang/MAECG/tree/main). Set `--experts vit_tiny_${task} vit_small_${task} vit_base_${task}` with _af_ or _id_ for different tasks. Register customized architectures in [_utils/dmm_models.py_](./utils/dmm_models.py) to evaluate more (make sure the shape is consistent).
+- Base on experts architecture, choose `pool` from _avg_ and _none_.
+- Set `--train_path ${data_path_1} ${data_path_2} ...` and `--test_path ${data_path_1} ${data_path_2} ...` to train and valid with multiple datasets.
 
 ### Evaluation
 
@@ -90,7 +96,7 @@ python main.py \
     --eval
 ```
 
--   Set `--probs_weighting` to enable probability weighting.
+- Set `--probs_weighting` to enable probability weighting.
 
 ### Results
 

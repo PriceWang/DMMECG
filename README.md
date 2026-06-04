@@ -2,7 +2,7 @@
  * @Author: Guoxin Wang
  * @Date: 2025-03-19 16:20:13
  * @LastEditors: Guoxin Wang
- * @LastEditTime: 2026-04-23 11:18:29
+ * @LastEditTime: 2026-06-04 13:38:40
  * @FilePath: /DMMECG/README.md
  * @Description:
  *
@@ -12,7 +12,7 @@
 ## DMMECG: Dynamic Model Mixture for Electrocardiogram
 
 <p align="center">
-  <img src="https://private-user-images.githubusercontent.com/30796250/582605459-60acdc4e-87fe-4645-b3cd-64fc1cab7d28.jpg?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzY5Mzk3OTUsIm5iZiI6MTc3NjkzOTQ5NSwicGF0aCI6Ii8zMDc5NjI1MC81ODI2MDU0NTktNjBhY2RjNGUtODdmZS00NjQ1LWIzY2QtNjRmYzFjYWI3ZDI4LmpwZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA0MjMlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNDIzVDEwMTgxNVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTc2YWQ3ODRmZGFjYjhlMTU1NTJlZGQ3M2ZhNWIwZjJhMTdjZjM3OTgxZmU0MDFkMGI3ZjUxZmNjMjUxMmJjNzcmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRmpwZWcifQ.toxem4pI7OlsIQB2-1SqHJ44ZfZnZwW_vS-inC3F9Tc" width="100%">
+  <img src="./assets/img.jpg" width="100%">
 </p>
 
 This is a PyTorch/GPU implementation of the paper [DMMECG](https://ieeexplore.ieee.org/document/11426826):
